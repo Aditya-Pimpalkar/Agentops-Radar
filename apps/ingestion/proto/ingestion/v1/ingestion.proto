@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package ingestion.v1;
+
+option go_package = "github.com/agentops-radar/ingestion/gen/ingestion/v1;ingestionv1";
+
+import "google/protobuf/struct.proto";
+import "google/api/annotations.proto";
+
+// IngestionService is the high-throughput trace ingestion layer.
+// A Go service receives agent spans and publishes them to Kafka for async
+// processing by downstream Python consumers (store, evaluate, embed).
+service IngestionService {
+  // StartRun opens a new agent run and returns a run_id.
+  rpc StartRun(StartRunRequest) returns (StartRunResponse) {
+    option (google.api.http) = {
+      post: "/v1/ingest/runs/start"
+      body: "*"
+    };
+  }
+
+  // AddEvent appends a trace event to an existing run.
+  rpc AddEvent(AddEventRequest) returns (AddEventResponse) {
+    option (google.api.http) = {
+      post: "/v1/ingest/runs/{run_id}/events"
+      body: "*"
+    };
+  }
+
+  // EndRun closes a run, setting its final status and metrics.
+  rpc EndRun(EndRunRequest) returns (EndRunResponse) {
+    option (google.api.http) = {
+      post: "/v1/ingest/runs/{run_id}/end"
+      body: "*"
+    };
+  }
+}
+
+// ─── Run messages ────────────────────────────────────────────────────────────
+
+message StartRunRequest {
+  string project_id = 1;
+  string agent_id   = 2;
+  string input      = 3;
+  string api_key    = 4;
+}
+
+message StartRunResponse {
+  string run_id    = 1;
+  string status    = 2;
+  string ingested_at = 3;
+}
+
+message EndRunRequest {
+  string run_id          = 1;
+  string final_output    = 2;
+  string status          = 3; // "success" | "failed" | "error"
+  double confidence_score = 4;
+  int64  total_tokens    = 5;
+  double estimated_cost_usd = 6;
+}
+
+message EndRunResponse {
+  string run_id = 1;
+  string status = 2;
+}
+
+// ─── Event message ────────────────────────────────────────────────────────────
+
+message AddEventRequest {
+  string run_id          = 1;
+  string event_type      = 2;
+  string name            = 3;
+  google.protobuf.Struct input  = 4;
+  google.protobuf.Struct output = 5;
+  google.protobuf.Struct metadata = 6;
+  int64  latency_ms      = 7;
+  string status          = 8;
+  string error_message   = 9;
+  string parent_event_id = 10;
+}
+
+message AddEventResponse {
+  string event_id    = 1;
+  string run_id      = 2;
+  string ingested_at = 3;
+}

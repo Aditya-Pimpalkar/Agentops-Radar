@@ -1,0 +1,54 @@
+{{- if and .Values.ingestion.enabled .Values.ingestion.autoscaling.enabled }}
+# HPA for the Go ingestion service using KEDA ScaledObject (Kafka-lag-based).
+#
+# KEDA watches the consumer-group lag on `trace.event.add` and adds
+# ingestion replicas when lag per replica exceeds lagThreshold.
+#
+# Install KEDA first:
+#   helm repo add kedacore https://kedacore.github.io/charts
+#   helm install keda kedacore/keda -n keda --create-namespace
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "agentops-radar.fullname" . }}-ingestion-scaler
+  labels:
+    {{- include "agentops-radar.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ingestion
+spec:
+  scaleTargetRef:
+    name: {{ include "agentops-radar.fullname" . }}-ingestion
+  minReplicaCount: {{ .Values.ingestion.autoscaling.minReplicas }}
+  maxReplicaCount: {{ .Values.ingestion.autoscaling.maxReplicas }}
+  cooldownPeriod: 60          # seconds to wait before scaling down
+  pollingInterval: 15         # check lag every 15s
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: {{ include "agentops-radar.kafkaBrokers" . | quote }}
+        consumerGroup: {{ .Values.ingestion.autoscaling.kafkaConsumerGroup | quote }}
+        topic: {{ .Values.ingestion.autoscaling.kafkaTopic | quote }}
+        lagThreshold: {{ .Values.ingestion.autoscaling.lagThreshold | quote }}
+        offsetResetPolicy: earliest
+---
+# Fallback standard HPA (CPU) — used when KEDA is not installed
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "agentops-radar.fullname" . }}-ingestion-cpu
+  labels:
+    {{- include "agentops-radar.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "agentops-radar.fullname" . }}-ingestion
+  minReplicas: {{ .Values.ingestion.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.ingestion.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+{{- end }}

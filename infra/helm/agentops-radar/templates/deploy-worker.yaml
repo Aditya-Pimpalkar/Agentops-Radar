@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentops-radar.fullname" . }}-worker
+  labels:
+    {{- include "agentops-radar.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agentops-radar.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "agentops-radar.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      containers:
+        - name: worker
+          image: "{{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag }}"
+          imagePullPolicy: {{ .Values.worker.image.pullPolicy }}
+          command:
+            - celery
+            - -A
+            - worker
+            - worker
+            - --loglevel=info
+            - --concurrency={{ .Values.worker.concurrency }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "agentops-radar.fullname" . }}-config
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://radar:$(POSTGRES_PASSWORD)@{{ .Release.Name }}-postgresql:5432/agentops_radar"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentops-radar.fullname" . }}-secrets
+                  key: postgresPassword
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentops-radar.fullname" . }}-secrets
+                  key: apiKey
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentops-radar.fullname" . }}-secrets
+                  key: secretKey
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentops-radar.fullname" . }}-secrets
+                  key: openaiApiKey
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentops-radar.fullname" . }}-worker
+  labels:
+    {{- include "agentops-radar.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "agentops-radar.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: worker

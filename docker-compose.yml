@@ -1,0 +1,250 @@
+services:
+
+  # ── Datastores ─────────────────────────────────────────────────────────────
+
+  postgres:
+    image: pgvector/pgvector:pg15   # postgres 15 + pgvector extension
+    environment:
+      POSTGRES_USER: radar
+      POSTGRES_PASSWORD: radar
+      POSTGRES_DB: agentops_radar
+    ports:
+      - "5433:5432"   # host 5433 → container 5432 (avoid conflict with local PG)
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - radar
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U radar -d agentops_radar"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    networks:
+      - radar
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Kafka (KRaft mode — no Zookeeper) ──────────────────────────────────────
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    hostname: kafka
+    container_name: kafka
+    ports:
+      - "9095:9092"       # host 9095 → container 9092 (avoids conflict with other Kafka containers)
+      - "9096:9094"       # host 9096 → container 9094 (external access from host)
+    environment:
+      # KRaft — single-node combined broker + controller
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+
+      # Listeners
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+      # Topic defaults — consumers create their own topics
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_RETENTION_HOURS: 24
+
+      # KRaft requires an explicit cluster ID (base64-encoded UUID)
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qg"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - radar
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 30s
+
+  # ── Go Ingestion Service ────────────────────────────────────────────────────
+  # High-throughput trace ingestion: gRPC :9090 / HTTP gateway :8080
+  # Publishes to Kafka; never writes to PostgreSQL directly.
+
+  ingestion:
+    build:
+      context: ./apps/ingestion
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"   # HTTP/JSON gateway (backward-compat with Python SDK)
+      - "9091:9090"   # host 9091 → container 9090 gRPC (avoids conflict with Prometheus)
+    networks:
+      - radar
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      GRPC_PORT: "9090"
+      HTTP_PORT: "8080"
+      API_KEY: dev-api-key-change-in-production
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Python FastAPI (query / evaluate / replay) ─────────────────────────────
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    networks:
+      - radar
+    environment:
+      DATABASE_URL: postgresql://radar:radar@postgres:5432/agentops_radar
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      API_KEY: dev-api-key-change-in-production
+      SECRET_KEY: change-this-secret-key-in-production
+      LLM_JUDGE_ENABLED: "false"
+      ENVIRONMENT: development
+      LOG_LEVEL: INFO
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./apps/api:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ── Celery worker (async evaluation + replay) ──────────────────────────────
+
+  worker:
+    build:
+      context: ./apps/worker
+      dockerfile: Dockerfile
+    networks:
+      - radar
+    environment:
+      DATABASE_URL: postgresql://radar:radar@postgres:5432/agentops_radar
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      API_KEY: dev-api-key-change-in-production
+      LLM_JUDGE_ENABLED: "false"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_JUDGE_MODEL: gpt-4o-mini
+      LOG_LEVEL: INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./apps/worker:/app
+    command: celery -A worker worker --loglevel=info --concurrency=2
+
+  # ── Kafka consumers ────────────────────────────────────────────────────────
+  # Three independent consumers pull from Kafka and handle different concerns.
+
+  consumer-store:
+    build:
+      context: ./apps/worker
+      dockerfile: Dockerfile
+    networks:
+      - radar
+    environment:
+      DATABASE_URL: postgresql://radar:radar@postgres:5432/agentops_radar
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_GROUP_ID: radar-store
+      LOG_LEVEL: INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./apps/worker:/app
+    command: python -m consumers.store_consumer
+    restart: unless-stopped
+
+  consumer-eval:
+    build:
+      context: ./apps/worker
+      dockerfile: Dockerfile
+    networks:
+      - radar
+    environment:
+      DATABASE_URL: postgresql://radar:radar@postgres:5432/agentops_radar
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_GROUP_ID: radar-eval
+      LOG_LEVEL: INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./apps/worker:/app
+    command: python -m consumers.eval_consumer
+    restart: unless-stopped
+
+  consumer-embed:
+    build:
+      context: ./apps/worker
+      dockerfile: Dockerfile
+    networks:
+      - radar
+    environment:
+      DATABASE_URL: postgresql://radar:radar@postgres:5432/agentops_radar
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_GROUP_ID: radar-embed
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LOG_LEVEL: INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./apps/worker:/app
+    command: python -m consumers.embed_consumer
+    restart: unless-stopped
+
+  # ── Next.js dashboard ──────────────────────────────────────────────────────
+
+  dashboard:
+    build:
+      context: ./apps/dashboard
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    networks:
+      - radar
+    environment:
+      INTERNAL_API_URL: http://api:8000
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_API_KEY: dev-api-key-change-in-production
+      NEXT_PUBLIC_INGESTION_URL: http://localhost:8080
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  kafka_data:
+
+networks:
+  radar:
+    driver: bridge

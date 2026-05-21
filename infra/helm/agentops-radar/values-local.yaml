@@ -1,0 +1,71 @@
+# Local development overrides (kind / minikube).
+# Usage:
+#   helm upgrade --install radar . \
+#     -f values.yaml -f values-local.yaml \
+#     --set secrets.openaiApiKey=$OPENAI_API_KEY
+
+global:
+  storageClass: "standard"   # minikube / kind default
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations: {}            # no cert-manager locally
+  hosts:
+    - host: radar.local
+      paths:
+        - path: /
+          pathType: Prefix
+          service: dashboard
+          port: 3000
+        - path: /api
+          pathType: Prefix
+          service: api
+          port: 8000
+        - path: /v1/ingest
+          pathType: Prefix
+          service: ingestion
+          port: 8080
+  tls: []                    # no TLS locally
+
+# Single replicas for local — save resources
+ingestion:
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+
+api:
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+
+worker:
+  replicaCount: 1
+
+consumers:
+  store:
+    replicaCount: 1
+  eval:
+    replicaCount: 1
+  embed:
+    replicaCount: 1
+
+dashboard:
+  replicaCount: 1
+
+kafka:
+  replicaCount: 1
+  controller:
+    replicaCount: 1
+  provisioning:
+    enabled: true
+    topics:
+      - name: trace.run.start
+        partitions: 1
+        replicationFactor: 1
+      - name: trace.event.add
+        partitions: 1
+        replicationFactor: 1
+      - name: trace.run.end
+        partitions: 1
+        replicationFactor: 1

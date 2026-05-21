@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agentops-radar.fullname" . }}-config
+  labels:
+    {{- include "agentops-radar.labels" . | nindent 4 }}
+data:
+  ENVIRONMENT: production
+  LOG_LEVEL: INFO
+  LLM_JUDGE_ENABLED: "false"
+  LLM_JUDGE_MODEL: gpt-4o-mini
+  REDIS_URL: {{ include "agentops-radar.redisUrl" . | quote }}
+  CELERY_BROKER_URL: {{ include "agentops-radar.redisUrl" . | quote }}
+  CELERY_RESULT_BACKEND: {{ include "agentops-radar.redisUrl" . | quote }}
+  KAFKA_BROKERS: {{ include "agentops-radar.kafkaBrokers" . | quote }}
+  GRPC_PORT: "9090"
+  HTTP_PORT: "8080"

@@ -1,0 +1,10 @@
+[
+  {"timestamp": "2024-01-15T14:32:01Z", "service": "checkout", "level": "ERROR", "message": "DB connection pool exhausted", "latency_ms": 2450, "status": 500},
+  {"timestamp": "2024-01-15T14:32:03Z", "service": "checkout", "level": "ERROR", "message": "Connection pool timeout after 2000ms", "latency_ms": 2001, "status": 503},
+  {"timestamp": "2024-01-15T14:32:05Z", "service": "checkout", "level": "WARN",  "message": "Retry attempt 1/3 for DB connection", "latency_ms": 800, "status": 200},
+  {"timestamp": "2024-01-15T14:31:55Z", "service": "checkout", "level": "ERROR", "message": "High latency detected: 2400ms (threshold: 500ms)", "latency_ms": 2400, "status": 500},
+  {"timestamp": "2024-01-15T14:31:50Z", "service": "deployment", "level": "INFO",  "message": "Deployment v42 completed successfully", "component": "deploy-bot"},
+  {"timestamp": "2024-01-15T14:31:52Z", "service": "checkout", "level": "WARN",  "message": "Connection pool size reduced from 50 to 10 in v42 config", "component": "config-loader"},
+  {"timestamp": "2024-01-15T14:30:00Z", "service": "checkout", "level": "INFO",  "message": "Checkout service healthy, avg latency 210ms", "latency_ms": 210, "status": 200},
+  {"timestamp": "2024-01-15T14:31:48Z", "service": "api-gateway", "level": "ERROR", "message": "Upstream checkout timeout", "latency_ms": 3000, "status": 504}
+]

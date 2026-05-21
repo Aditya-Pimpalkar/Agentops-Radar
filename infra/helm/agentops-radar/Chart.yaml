@@ -1,0 +1,19 @@
+apiVersion: v2
+name: agentops-radar
+description: >
+  AgentOps Radar — production observability, evaluation, and debugging
+  platform for AI agents. Go ingestion service (gRPC + HTTP), Kafka
+  event backbone, Python evaluation engine, pgvector semantic search,
+  and a Next.js dashboard.
+type: application
+version: 0.2.0
+appVersion: "2.0.0"
+keywords:
+  - ai
+  - observability
+  - agents
+  - kafka
+  - pgvector
+home: https://github.com/agentops-radar/agentops-radar
+maintainers:
+  - name: AgentOps Radar Team

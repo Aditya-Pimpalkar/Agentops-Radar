@@ -1,0 +1,29 @@
+{
+  "checkout_latency_p99_ms": [
+    {"time": "14:30:00", "value": 220},
+    {"time": "14:30:30", "value": 235},
+    {"time": "14:31:00", "value": 280},
+    {"time": "14:31:30", "value": 890},
+    {"time": "14:31:50", "value": 2450},
+    {"time": "14:32:00", "value": 2400},
+    {"time": "14:32:30", "value": 2380}
+  ],
+  "checkout_error_rate": [
+    {"time": "14:30:00", "value": 0.001},
+    {"time": "14:30:30", "value": 0.001},
+    {"time": "14:31:00", "value": 0.003},
+    {"time": "14:31:30", "value": 0.12},
+    {"time": "14:31:50", "value": 0.45},
+    {"time": "14:32:00", "value": 0.48},
+    {"time": "14:32:30", "value": 0.47}
+  ],
+  "db_connection_pool_active": [
+    {"time": "14:30:00", "value": 12},
+    {"time": "14:31:45", "value": 10},
+    {"time": "14:31:50", "value": 10},
+    {"time": "14:32:00", "value": 10}
+  ],
+  "deployment_events": [
+    {"time": "14:31:50", "version": "v42", "status": "success"}
+  ]
+}

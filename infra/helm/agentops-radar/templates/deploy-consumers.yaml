@@ -1,0 +1,139 @@
+{{/* ── store consumer ──────────────────────────────────────────────────── */}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentops-radar.fullname" . }}-consumer-store
+  labels:
+    {{- include "agentops-radar.labels" . | nindent 4 }}
+    app.kubernetes.io/component: consumer-store
+spec:
+  replicas: {{ .Values.consumers.store.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agentops-radar.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: consumer-store
+  template:
+    metadata:
+      labels:
+        {{- include "agentops-radar.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: consumer-store
+    spec:
+      containers:
+        - name: consumer-store
+          image: "{{ .Values.consumers.store.image.repository }}:{{ .Values.consumers.store.image.tag }}"
+          command: ["python", "-m", "consumers.store_consumer"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "agentops-radar.fullname" . }}-config
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://radar:$(POSTGRES_PASSWORD)@{{ .Release.Name }}-postgresql:5432/agentops_radar"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentops-radar.fullname" . }}-secrets
+                  key: postgresPassword
+            - name: KAFKA_GROUP_ID
+              value: "radar-store"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+{{/* ── eval consumer ───────────────────────────────────────────────────── */}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentops-radar.fullname" . }}-consumer-eval
+  labels:
+    {{- include "agentops-radar.labels" . | nindent 4 }}
+    app.kubernetes.io/component: consumer-eval
+spec:
+  replicas: {{ .Values.consumers.eval.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agentops-radar.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: consumer-eval
+  template:
+    metadata:
+      labels:
+        {{- include "agentops-radar.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: consumer-eval
+    spec:
+      containers:
+        - name: consumer-eval
+          image: "{{ .Values.consumers.eval.image.repository }}:{{ .Values.consumers.eval.image.tag }}"
+          command: ["python", "-m", "consumers.eval_consumer"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "agentops-radar.fullname" . }}-config
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://radar:$(POSTGRES_PASSWORD)@{{ .Release.Name }}-postgresql:5432/agentops_radar"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentops-radar.fullname" . }}-secrets
+                  key: postgresPassword
+            - name: KAFKA_GROUP_ID
+              value: "radar-eval"
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+---
+{{/* ── embed consumer ──────────────────────────────────────────────────── */}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentops-radar.fullname" . }}-consumer-embed
+  labels:
+    {{- include "agentops-radar.labels" . | nindent 4 }}
+    app.kubernetes.io/component: consumer-embed
+spec:
+  replicas: {{ .Values.consumers.embed.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agentops-radar.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: consumer-embed
+  template:
+    metadata:
+      labels:
+        {{- include "agentops-radar.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: consumer-embed
+    spec:
+      containers:
+        - name: consumer-embed
+          image: "{{ .Values.consumers.embed.image.repository }}:{{ .Values.consumers.embed.image.tag }}"
+          command: ["python", "-m", "consumers.embed_consumer"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "agentops-radar.fullname" . }}-config
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://radar:$(POSTGRES_PASSWORD)@{{ .Release.Name }}-postgresql:5432/agentops_radar"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentops-radar.fullname" . }}-secrets
+                  key: postgresPassword
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentops-radar.fullname" . }}-secrets
+                  key: openaiApiKey
+            - name: KAFKA_GROUP_ID
+              value: "radar-embed"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi

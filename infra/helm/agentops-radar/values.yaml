@@ -1,0 +1,205 @@
+# ── Global ────────────────────────────────────────────────────────────────────
+global:
+  imageRegistry: ""         # override to use a private registry
+  imagePullSecrets: []
+  storageClass: "standard"  # use "standard" for kind/minikube, "gp2" for EKS
+
+# ── Ingress ───────────────────────────────────────────────────────────────────
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"   # remove for local
+  hosts:
+    - host: radar.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: dashboard
+          port: 3000
+        - path: /api
+          pathType: Prefix
+          service: api
+          port: 8000
+        - path: /v1/ingest
+          pathType: Prefix
+          service: ingestion
+          port: 8080
+  tls:
+    - secretName: radar-tls
+      hosts:
+        - radar.example.com
+
+# ── Secrets (override via --set or an external secrets manager) ───────────────
+secrets:
+  apiKey: "dev-api-key-change-in-production"
+  secretKey: "change-this-secret-key-in-production"
+  openaiApiKey: ""
+  postgresPassword: "radar"
+
+# ── Go Ingestion Service ──────────────────────────────────────────────────────
+ingestion:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: agentops-radar/ingestion
+    tag: "2.0.0"
+    pullPolicy: IfNotPresent
+  ports:
+    http: 8080
+    grpc: 9090
+  resources:
+    requests:
+      cpu: 100m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  # HPA — scale on Kafka consumer lag (requires KEDA or custom metrics adapter)
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 20
+    kafkaTopic: "trace.event.add"
+    kafkaConsumerGroup: "radar-store"
+    lagThreshold: 100          # scale up when lag > 100 messages per replica
+
+# ── Python API ────────────────────────────────────────────────────────────────
+api:
+  replicaCount: 2
+  image:
+    repository: agentops-radar/api
+    tag: "2.0.0"
+    pullPolicy: IfNotPresent
+  port: 8000
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+# ── Celery Worker ─────────────────────────────────────────────────────────────
+worker:
+  replicaCount: 2
+  image:
+    repository: agentops-radar/worker
+    tag: "2.0.0"
+    pullPolicy: IfNotPresent
+  concurrency: 4
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+
+# ── Kafka Consumers ───────────────────────────────────────────────────────────
+consumers:
+  store:
+    replicaCount: 2    # 2 replicas = 2 partitions consumed in parallel
+    image:
+      repository: agentops-radar/worker
+      tag: "2.0.0"
+  eval:
+    replicaCount: 2
+    image:
+      repository: agentops-radar/worker
+      tag: "2.0.0"
+  embed:
+    replicaCount: 1    # embedding calls are API-bound, not CPU-bound
+    image:
+      repository: agentops-radar/worker
+      tag: "2.0.0"
+
+# ── Dashboard ─────────────────────────────────────────────────────────────────
+dashboard:
+  replicaCount: 2
+  image:
+    repository: agentops-radar/dashboard
+    tag: "2.0.0"
+    pullPolicy: IfNotPresent
+  port: 3000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# ── PostgreSQL (bitnami) ──────────────────────────────────────────────────────
+postgresql:
+  enabled: true
+  auth:
+    username: radar
+    database: agentops_radar
+    existingSecret: agentops-radar-secrets
+    secretKeys:
+      userPasswordKey: postgresPassword
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+    initdb:
+      scripts:
+        init.sql: |
+          CREATE EXTENSION IF NOT EXISTS vector;
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+# ── Redis (bitnami) ───────────────────────────────────────────────────────────
+redis:
+  enabled: true
+  auth:
+    enabled: false
+  master:
+    persistence:
+      enabled: false   # Redis is ephemeral — Celery broker state is recoverable
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+
+# ── Kafka (bitnami) ───────────────────────────────────────────────────────────
+kafka:
+  enabled: true
+  replicaCount: 3          # 3-broker cluster for production HA
+  kraft:
+    enabled: true          # KRaft mode (no Zookeeper)
+  controller:
+    replicaCount: 3
+  persistence:
+    enabled: true
+    size: 20Gi
+  provisioning:
+    enabled: true
+    topics:
+      - name: trace.run.start
+        partitions: 3
+        replicationFactor: 3
+      - name: trace.event.add
+        partitions: 6       # higher partition count for peak throughput
+        replicationFactor: 3
+      - name: trace.run.end
+        partitions: 3
+        replicationFactor: 3
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
