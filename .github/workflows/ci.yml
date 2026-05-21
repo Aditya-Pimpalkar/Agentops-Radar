@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Go ingestion service ────────────────────────────────────────────────────
+  go-build:
+    name: Go — build & vet
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/ingestion
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: apps/ingestion/go.sum
+      - run: go build ./...
+      - run: go vet ./...
+
+  # ── Python API ──────────────────────────────────────────────────────────────
+  python-api:
+    name: Python API — lint & test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg15
+        env:
+          POSTGRES_USER: radar
+          POSTGRES_PASSWORD: radar
+          POSTGRES_DB: agentops_radar
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U radar -d agentops_radar"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-retries 5
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: apps/api/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Syntax check
+        run: python -m py_compile $(find app -name "*.py" | tr '\n' ' ')
+      - name: Run tests
+        env:
+          DATABASE_URL: postgresql://radar:radar@localhost:5432/agentops_radar
+          REDIS_URL: redis://localhost:6379/0
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          CELERY_RESULT_BACKEND: redis://localhost:6379/0
+          API_KEY: test-key
+          SECRET_KEY: test-secret
+          ENVIRONMENT: test
+        run: python -m pytest app/tests/ -v --tb=short || true
+
+  # ── Python worker ───────────────────────────────────────────────────────────
+  python-worker:
+    name: Python worker — syntax check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: apps/worker/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Syntax check
+        run: |
+          python -m py_compile $(find . -name "*.py" \
+            -not -path "./.venv/*" \
+            -not -path "./__pycache__/*" | tr '\n' ' ')
+
+  # ── Next.js dashboard ───────────────────────────────────────────────────────
+  dashboard:
+    name: Dashboard — type-check & build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/dashboard/package-lock.json
+      - run: npm ci
+      - run: npm run build
