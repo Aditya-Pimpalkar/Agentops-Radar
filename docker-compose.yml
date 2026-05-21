@@ -116,7 +116,8 @@ services:
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       API_KEY: dev-api-key-change-in-production
       SECRET_KEY: change-this-secret-key-in-production
-      LLM_JUDGE_ENABLED: "false"
+      LLM_JUDGE_ENABLED: ${LLM_JUDGE_ENABLED:-false}
+      LLM_JUDGE_MODEL: gpt-4o-mini
       ENVIRONMENT: development
       LOG_LEVEL: INFO
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -143,9 +144,9 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       API_KEY: dev-api-key-change-in-production
-      LLM_JUDGE_ENABLED: "false"
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_JUDGE_ENABLED: ${LLM_JUDGE_ENABLED:-false}
       LLM_JUDGE_MODEL: gpt-4o-mini
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       LOG_LEVEL: INFO
     depends_on:
       postgres:
@@ -190,6 +191,9 @@ services:
       DATABASE_URL: postgresql://radar:radar@postgres:5432/agentops_radar
       KAFKA_BROKERS: kafka:9092
       KAFKA_GROUP_ID: radar-eval
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_JUDGE_ENABLED: ${LLM_JUDGE_ENABLED:-false}
+      LLM_JUDGE_MODEL: gpt-4o-mini
       LOG_LEVEL: INFO
     depends_on:
       postgres:

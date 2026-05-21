@@ -155,18 +155,18 @@ def _upsert_embedding(run_id: str, vector: list[float], text_content: str) -> No
     with engine.begin() as conn:
         conn.execute(
             text("""
-                INSERT INTO trace_embeddings (run_id, model, embedding, embedding_text, created_at)
-                VALUES (:run_id, :model, :embedding::vector, :text, NOW())
+                INSERT INTO trace_embeddings (id, run_id, model, embedding, embedding_text, created_at)
+                VALUES (gen_random_uuid(), :run_id, :model, :embedding::vector, :text, NOW())
                 ON CONFLICT (run_id) DO UPDATE
-                  SET embedding = EXCLUDED.embedding,
-                      embedding_text = EXCLUDED.embedding_text,
-                      created_at = NOW()
+                  SET embedding        = EXCLUDED.embedding,
+                      embedding_text   = EXCLUDED.embedding_text,
+                      created_at       = NOW()
             """),
             {
                 "run_id": run_id,
                 "model": EMBED_MODEL,
                 "embedding": vector_str,
-                "text": text_content[:4000],  # cap for storage
+                "text": text_content[:4000],
             },
         )
 

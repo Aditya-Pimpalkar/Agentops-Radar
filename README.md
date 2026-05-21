@@ -9,27 +9,140 @@ AgentOps Radar gives engineering teams full visibility into every model call, to
 ## Architecture
 
 ```
-Python SDK / REST clients
-        │
-        ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  Go Ingestion Service  (gRPC :9090  ·  HTTP gateway :8080)       │
-│  franz-go producer → Kafka (KRaft, no Zookeeper)                 │
-│                                                                  │
-│   topic: trace.run.start ──▶ store_consumer ──▶ PostgreSQL       │
-│   topic: trace.event.add ──▶ eval_consumer  ──▶ evaluations      │
-│   topic: trace.run.end   ──▶ embed_consumer ──▶ pgvector         │
-└──────────────────────────────────────────────────────────────────┘
-        │
-        ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  FastAPI  — query / replay / similarity / alerts                  │
-│  Celery + Redis  — async evaluation, LLM judge                   │
-│  PostgreSQL + pgvector  — traces, evals, embeddings              │
-└──────────────────────────────────────────────────────────────────┘
-        │
-        ▼
-  Next.js Dashboard  (traces · evals · replay · similarity search)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           CLIENT LAYER                                      │
+│                                                                             │
+│   Python SDK          REST clients          Demo Agent (incident bot)       │
+│   (context manager,   (curl / Postman /     apps/demo-agent/                │
+│    decorators)         dashboard frontend)                                  │
+└────────────────────────────┬────────────────────────────────────────────────┘
+                             │  HTTP POST  /v1/ingest/*   or   gRPC :9090
+                             ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    GO INGESTION SERVICE   :8080 / :9090                     │
+│                                                                             │
+│  ┌────────────────────────┐    ┌──────────────────────────────────────────┐ │
+│  │  HTTP Gateway          │    │  gRPC Server (server.go)                 │ │
+│  │  (gateway.go)          │───▶│  • authenticates X-API-Key               │ │
+│  │                        │    │  • validates required fields             │ │
+│  │  • /v1/ingest/runs/    │    │  • assigns UUID (run_id / event_id)      │ │
+│  │    start|events|end    │    │  • calls Kafka producer                  │ │
+│  │  • /api/runs/* (compat)│    └────────────────┬─────────────────────────┘ │
+│  │  • /health  /metrics   │                     │                           │
+│  └────────────────────────┘                     │                           │
+│                                                  │  ProduceSync             │
+│  ┌───────────────────────────────────────────────▼─────────────────────────┐│
+│  │  Kafka Producer  (producer.go)  franz-go · AllISRAcks · 5ms linger      ││
+│  └───────────────────────────────────────────────────────────────────────── ┘│
+└────────────────────────────────────┬────────────────────────────────────────┘
+                                     │
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│               KAFKA   (KRaft — no Zookeeper)   confluentinc/cp-kafka:7.6   │
+│                                                                             │
+│   trace.run.start  ─── 3 partitions, key=run_id ──────────────────────     │
+│   trace.event.add  ─── 3 partitions, key=run_id  (co-partitioned)  ─────   │
+│   trace.run.end    ─── 3 partitions, key=run_id ──────────────────────     │
+│                                                                             │
+│   Co-partitioning by run_id guarantees all messages for a run land on      │
+│   the same partition → ordered delivery within each consumer group.        │
+└──────────┬─────────────────────────┬──────────────────────────┬────────────┘
+           │                         │                          │
+           ▼                         ▼                          ▼
+┌──────────────────┐   ┌──────────────────────────┐  ┌─────────────────────┐
+│  store_consumer  │   │     eval_consumer         │  │   embed_consumer    │
+│  group:radar-    │   │     group:radar-eval       │  │   group:radar-embed │
+│  store           │   │                           │  │                     │
+│                  │   │  on trace.run.end:         │  │  on trace.run.end:  │
+│  run.start →     │   │  1. sleep 2s (let store   │  │  skip if high-conf  │
+│   INSERT runs    │   │     finish writing)        │  │  success runs       │
+│                  │   │  2. run_all_evaluators()  │  │                     │
+│  event.add →     │   │     (8 rule-based)         │  │  sleep 3s           │
+│   INSERT         │   │  3. run_llm_judge()        │  │  _build_embedding_  │
+│   trace_events   │   │     (if key + enabled)     │  │  text() from DB     │
+│                  │   │  4. INSERT evaluations     │  │                     │
+│  run.end →       │   │                           │  │  OpenAI             │
+│   UPDATE runs    │   │                           │  │  text-embedding-    │
+│   (status,       │   │                           │  │  3-small (1536d)    │
+│    confidence,   │   │                           │  │                     │
+│    final_output) │   │                           │  │  pgvector upsert    │
+└────────┬─────────┘   └────────────┬──────────────┘  └──────────┬──────────┘
+         │                          │                             │
+         └──────────────────────────┴─────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                  POSTGRESQL  +  pgvector                                    │
+│                                                                             │
+│  runs              id, project_id, agent_id, input, final_output,          │
+│                    status, confidence_score, total_tokens, cost,            │
+│                    total_latency_ms, failure_labels (JSONB), started_at     │
+│                                                                             │
+│  trace_events      id, run_id, event_type, name, input, output,            │
+│                    metadata (JSONB), latency_ms, status, error_message      │
+│                                                                             │
+│  evaluations       id, run_id, evaluator_name, score, passed, reason       │
+│                                                                             │
+│  trace_embeddings  id, run_id, model, embedding vector(1536),              │
+│                    embedding_text  ← IVFFlat cosine index (lists=100)       │
+│                                                                             │
+│  replay_runs       id, original_run_id, prompt_override,                   │
+│                    guardrail_strictness, score_delta (JSONB)                │
+│                                                                             │
+│  alerts / alert_rules / projects / agents                                  │
+└──────────────────────────────┬──────────────────────────────────────────────┘
+                               │  SQLAlchemy 2.0 queries
+                               ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                   FASTAPI  :8000   +   CELERY WORKER                       │
+│                                                                             │
+│  Query / replay API:                  Celery tasks (async via Redis):       │
+│  POST  /api/runs/start                • evaluate.apply_async()             │
+│  POST  /api/runs/{id}/events          • detect_failures.apply_async()      │
+│  POST  /api/runs/{id}/end             • replay simulation                  │
+│  GET   /api/runs/{id}/trace                                                 │
+│  POST  /api/runs/{id}/evaluate        LLM judge (gpt-4o-mini):             │
+│  POST  /api/runs/{id}/replay          • called by Celery worker AND        │
+│  GET   /api/runs/{id}/replay/         eval_consumer when key is set        │
+│        comparison                                                           │
+│  GET   /api/runs/{id}/similar   ─── pgvector cosine search                 │
+│  POST  /api/runs/{id}/embed     ─── trigger embedding on demand            │
+│  GET   /api/analytics/overview                                             │
+│  GET   /api/analytics/failures                                             │
+│  POST  /api/alerts/rules                                                   │
+└──────────────────────────────┬──────────────────────────────────────────────┘
+                               │  REST (server-side + client-side fetches)
+                               ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                  NEXT.JS DASHBOARD   :3000                                  │
+│                                                                             │
+│  /dashboard     Failure rate chart, latency p50/p95, eval pass-rate        │
+│  /runs          Run list with status badges, confidence, latency            │
+│  /runs/[id]     Full trace timeline (event tree)                           │
+│                 Evaluation scorecard (8 evaluators, PASS/FAIL badges)      │
+│                 Replay panel (before/after score bars + Δ% badges)         │
+│                 Similar Failures (cosine similarity bars, status)          │
+│  /playground    Live streaming trace demo (events appear ≤500ms apart)    │
+│  /alerts        Alert rules + triggered alert list                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│               KUBERNETES   (kind / minikube)                                │
+│                                                                             │
+│  Helm chart: infra/helm/agentops-radar/                                    │
+│                                                                             │
+│  Ingress (nginx)   radar.local                                             │
+│    /              → dashboard :3000                                        │
+│    /api           → api :8000                                              │
+│    /v1/ingest     → ingestion :8080                                        │
+│                                                                             │
+│  KEDA ScaledObject → ingestion Deployment                                  │
+│    trigger : Kafka consumer group lag (group=radar-store)                  │
+│    lagThreshold : 100 messages per replica                                 │
+│    minReplicas : 2   maxReplicas : 20                                      │
+│                                                                             │
+│  Fallback HPA → CPU 70% utilisation                                        │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -53,8 +166,11 @@ Python SDK / REST clients
 ## Quick Start
 
 ```bash
-# 1. Copy env and fill in OPENAI_API_KEY if you want embeddings / LLM judge
+# 1. Copy env and set your OpenAI key (needed for LLM judge + embeddings)
 cp .env.example .env
+# Edit .env and fill in:
+#   OPENAI_API_KEY=sk-...
+#   LLM_JUDGE_ENABLED=true
 
 # 2. Start all 10 services
 docker compose up --build
@@ -86,72 +202,51 @@ python main.py --replay <id> # replay with stricter guardrails
 
 ## Go Ingestion Service
 
-High-throughput trace ingestion in Go — decouples write path from the Python query API.
-
 ```
 apps/ingestion/
-├── cmd/server/main.go          # entry point — gRPC + HTTP gateway
+├── cmd/server/main.go          entry point — gRPC :9090 + HTTP gateway :8080
 ├── internal/
-│   ├── server/server.go        # IngestionServiceServer implementation
-│   ├── gateway/gateway.go      # HTTP/JSON → in-process gRPC bridge
-│   └── kafka/producer.go       # franz-go AllISRAcks idempotent producer
-├── gen/ingestion/v1/           # hand-written gRPC stubs (no protoc dep)
-└── proto/ingestion/v1/         # .proto contract
+│   ├── server/server.go        IngestionServiceServer implementation
+│   ├── gateway/gateway.go      HTTP/JSON → in-process gRPC bridge
+│   └── kafka/producer.go       franz-go AllISRAcks idempotent producer
+├── gen/ingestion/v1/           gRPC stubs (hand-written, no protoc dep)
+└── proto/ingestion/v1/         .proto contract
 ```
 
-**API (both gRPC and HTTP/JSON):**
-
 ```bash
-# Start a run
+# HTTP
 POST /v1/ingest/runs/start
 {"project_id": "...", "input": "Investigate checkout latency"}
 
-# Add a trace event
 POST /v1/ingest/runs/{run_id}/events
 {"event_type": "retrieval", "name": "search_logs", "output": {"hits": 8}, "latency_ms": 320}
 
-# End a run
 POST /v1/ingest/runs/{run_id}/end
 {"status": "success", "confidence_score": 0.87, "final_output": "DB pool exhaustion"}
-```
 
-Also accepts the legacy Python API paths (`/api/runs/...`) for backward compatibility.
+# Legacy SDK paths also supported
+POST /api/runs/start  →  same as /v1/ingest/runs/start
+```
 
 ---
 
-## Kafka Consumers
+## Kafka Fan-out
 
-Three independent consumers fan out from Kafka — each concern is isolated:
+Three independent consumer groups — each concern is isolated and scales separately:
 
-| Consumer | Topics | Responsibility |
+| Consumer | Topics consumed | Responsibility |
 |---|---|---|
 | `store_consumer` | run.start, event.add, run.end | Write runs + events to PostgreSQL |
-| `eval_consumer` | run.end | Trigger rule-based evaluation after run completes |
-| `embed_consumer` | run.end | Generate OpenAI embeddings for failed/low-confidence runs |
-
----
-
-## Semantic Similarity Search (pgvector)
-
-Failed runs are embedded with `text-embedding-3-small` (1536 dims) and stored in PostgreSQL with an IVFFlat cosine index.
-
-```bash
-# Embed a run
-POST /api/runs/{run_id}/embed
-
-# Find similar failures
-GET /api/runs/{run_id}/similar?limit=5
-```
-
-The dashboard shows a **Similar Failures** panel on each run detail page with similarity bars and status badges.
+| `eval_consumer` | run.end | Rule-based evaluation + LLM judge |
+| `embed_consumer` | run.end | OpenAI embeddings → pgvector |
 
 ---
 
 ## Evaluation Engine
 
-**Rule-based evaluators** (always run, no API key needed):
+**Rule-based evaluators** (always run):
 
-| Evaluator | What it checks | Pass threshold |
+| Evaluator | What it measures | Pass threshold |
 |---|---|---|
 | `groundedness` | Retrieval evidence quality × confidence | ≥ 0.70 |
 | `relevance` | Output completeness vs. inconclusive markers | ≥ 0.60 |
@@ -162,14 +257,30 @@ The dashboard shows a **Similar Failures** panel on each run detail page with si
 | `retry_loop` | Retry count | ≥ 0.50 |
 | `evidence` | Retrieval hit count | ≥ 0.60 |
 
-**LLM judge** (set `OPENAI_API_KEY` + `LLM_JUDGE_ENABLED=true`):
-Scores output quality with `gpt-4o-mini` on a 0–1 scale.
+**LLM judge** — set `OPENAI_API_KEY` and `LLM_JUDGE_ENABLED=true`:
+- Scores output quality (accuracy, completeness, relevance, safety) 0–1 using `gpt-4o-mini`
+- Runs after rule-based evaluators in `eval_consumer`
+- Stored as a 9th evaluation row with `evaluator_name='llm_judge'`
+
+---
+
+## Semantic Similarity Search
+
+Failed runs are embedded with `text-embedding-3-small` (1536 dimensions) and stored with an IVFFlat cosine index.
+
+```bash
+# Embed a run
+POST /api/runs/{run_id}/embed
+
+# Find similar past failures
+GET /api/runs/{run_id}/similar?limit=5
+```
+
+The **Similar Failures** panel on each run detail page shows similarity bars (red ≥ 85%, orange ≥ 70%) and run metadata.
 
 ---
 
 ## Replay & Regression
-
-Replay a failed run with a modified prompt or stricter guardrails and compare evaluation scores side by side:
 
 ```python
 client.replay_run(
@@ -179,7 +290,7 @@ client.replay_run(
 )
 ```
 
-The dashboard **Replay** panel shows before/after score bars with coloured pass/fail badges and delta percentages.
+The dashboard **Replay** panel shows before/after score bars with coloured PASS/FAIL badges and Δ% delta numbers.
 
 ---
 
@@ -204,7 +315,7 @@ client.replay_run(run.run_id, prompt_override="Stricter evidence validation")
 
 ---
 
-## Kubernetes (local kind cluster)
+## Kubernetes
 
 ```bash
 # Prerequisites: kind, kubectl, helm, docker
@@ -212,24 +323,7 @@ chmod +x infra/deploy-local.sh
 ./infra/deploy-local.sh
 ```
 
-The script provisions a kind cluster, installs ingress-nginx and KEDA, builds Docker images, and deploys via Helm.
-
-**KEDA autoscaling:** The Go ingestion service scales from 2 → 20 replicas based on Kafka consumer group lag (`lagThreshold: 100` messages per replica).
-
----
-
-## Failure Detection
-
-Automatic labels applied to runs:
-
-| Label | Trigger |
-|---|---|
-| `tool_error` | Tool call with `status=error` |
-| `tool_timeout` | Tool error containing "timeout" |
-| `excessive_retries` | ≥ 3 retry events |
-| `high_latency` | Total latency > 15 000 ms |
-| `low_confidence` | Confidence score < 0.50 |
-| `unsafe_output` | Guardrail violation |
+Provisions a kind cluster, installs ingress-nginx and KEDA, builds Docker images, and deploys via Helm. The ingestion service scales 2 → 20 pods on Kafka consumer group lag.
 
 ---
 
@@ -252,13 +346,3 @@ agentops-radar/
 │   └── deploy-local.sh kind/minikube deploy script
 └── docker-compose.yml  10-service local stack
 ```
-
----
-
-## Resume Bullet Points
-
-- Designed and built a **Go gRPC + HTTP ingestion service** (franz-go, uber/zap) decoupling the write path from the Python API; fan-out to three independent Kafka consumers (store, evaluate, embed) for async processing.
-- Implemented **Kafka KRaft-mode event streaming** (no Zookeeper) with KEDA-based autoscaling — ingestion pods scale 2 → 20 replicas on consumer group lag.
-- Built **semantic failure search** using OpenAI `text-embedding-3-small` stored in **pgvector** with IVFFlat cosine index; surface similar past failures from a single API call.
-- Wrote full **Helm chart** with production and local (kind) value overrides, ingress-nginx, KEDA `ScaledObject`, and a one-command kind deploy script.
-- Implemented **8-evaluator scoring engine** (groundedness, safety, latency, evidence, format compliance, retry loop) with rule-based and LLM-judge modes; replay pipeline lets engineers iterate on prompt strategies and compare scores side by side.
