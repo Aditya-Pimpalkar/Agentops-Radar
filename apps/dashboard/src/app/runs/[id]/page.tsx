@@ -22,75 +22,130 @@ async function getAll(id: string) {
   return { run, trace: trace as TraceEvent[], evals: evals as Evaluation[], alerts: runAlerts, comparison };
 }
 
+function SectionHeader({
+  title, description, count,
+}: {
+  title: string; description?: string; count?: number;
+}) {
+  return (
+    <div className="mb-4">
+      <div className="flex items-center gap-2">
+        <h2 className="text-sm font-semibold text-white">{title}</h2>
+        {count !== undefined && (
+          <span
+            className="mono text-xs px-1.5 py-0.5 rounded"
+            style={{ background: "var(--border-bright)", color: "var(--muted-bright)" }}
+          >
+            {count}
+          </span>
+        )}
+      </div>
+      {description && (
+        <p className="text-xs mt-0.5" style={{ color: "var(--muted)" }}>
+          {description}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default async function RunDetailPage({ params }: { params: { id: string } }) {
   const { run, trace, evals, alerts, comparison } = await getAll(params.id);
 
   if (!run) {
     return (
-      <div className="text-center py-20 text-radar-muted">
-        Run not found.{" "}
-        <Link href="/runs" className="text-radar-accent hover:underline">Back to runs</Link>
+      <div className="text-center py-20" style={{ color: "var(--muted)" }}>
+        <div className="text-4xl mb-4">🔍</div>
+        <div className="text-white font-medium mb-1">Run not found</div>
+        <Link href="/runs" style={{ color: "var(--accent)" }} className="text-sm hover:underline">← Back to runs</Link>
       </div>
     );
   }
 
+  const isFailure = run.status === "failed" || run.status === "error";
+
   return (
-    <div className="space-y-6 max-w-5xl">
-      <div className="flex items-start justify-between">
-        <div>
-          <Link href="/runs" className="text-radar-muted text-xs hover:text-white">← Runs</Link>
-          <h1 className="text-xl font-bold text-white mt-1 font-mono">{run.id}</h1>
+    <div className="space-y-5 max-w-5xl">
+      {/* Breadcrumb + title */}
+      <div>
+        <Link href="/runs" className="text-xs hover:underline" style={{ color: "var(--muted)" }}>← All runs</Link>
+        <div className="flex items-center justify-between mt-2 gap-4">
+          <div className="flex-1 min-w-0">
+            <h1 className="text-base font-semibold text-white truncate">
+              {run.input ?? "Untitled run"}
+            </h1>
+            <div className="mono text-xs mt-0.5" style={{ color: "var(--muted)" }}>{run.id}</div>
+          </div>
+          <StatusBadge status={run.status} />
         </div>
-        <StatusBadge status={run.status} />
       </div>
 
-      {/* Run metadata */}
+      {/* Run summary card */}
       <div className="card">
-        <div className="text-xs text-radar-muted uppercase tracking-widest mb-3">Run Summary</div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+        <SectionHeader
+          title="Run summary"
+          description="Key metrics for this agent execution"
+        />
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-5 mb-5">
           <div>
-            <div className="text-radar-muted text-xs mb-1">Confidence</div>
+            <div className="section-label mb-2">Confidence</div>
             <ScoreBar score={run.confidence_score} />
           </div>
           <div>
-            <div className="text-radar-muted text-xs mb-1">Latency</div>
-            <div className="text-white">{run.total_latency_ms ? `${run.total_latency_ms.toLocaleString()}ms` : "—"}</div>
+            <div className="section-label mb-1">Latency</div>
+            <div className="mono text-base font-semibold text-white">
+              {run.total_latency_ms ? `${run.total_latency_ms.toLocaleString()}ms` : "—"}
+            </div>
           </div>
           <div>
-            <div className="text-radar-muted text-xs mb-1">Tokens</div>
-            <div className="text-white">{run.total_tokens?.toLocaleString() ?? "—"}</div>
+            <div className="section-label mb-1">Tokens</div>
+            <div className="mono text-base font-semibold text-white">
+              {run.total_tokens?.toLocaleString() ?? "—"}
+            </div>
           </div>
           <div>
-            <div className="text-radar-muted text-xs mb-1">Cost</div>
-            <div className="text-white">{run.estimated_cost_usd ? `$${Number(run.estimated_cost_usd).toFixed(6)}` : "—"}</div>
+            <div className="section-label mb-1">Cost</div>
+            <div className="mono text-base font-semibold text-white">
+              {run.estimated_cost_usd ? `$${Number(run.estimated_cost_usd).toFixed(6)}` : "—"}
+            </div>
           </div>
         </div>
-        {run.input && (
-          <div className="mt-4 pt-4 border-t border-radar-border">
-            <div className="text-radar-muted text-xs mb-1">Input</div>
-            <div className="text-sm text-white/80">{run.input}</div>
-          </div>
-        )}
-        {run.final_output && (
-          <div className="mt-3">
-            <div className="text-radar-muted text-xs mb-1">Output</div>
-            <div className="text-sm text-white/80">{run.final_output}</div>
+
+        {/* Input / output */}
+        {(run.input || run.final_output) && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4" style={{ borderTop: "1px solid var(--border)" }}>
+            {run.input && (
+              <div>
+                <div className="section-label mb-2">Input</div>
+                <p className="text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.8)" }}>{run.input}</p>
+              </div>
+            )}
+            {run.final_output && (
+              <div>
+                <div className="section-label mb-2">Final output</div>
+                <p className="text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.8)" }}>{run.final_output}</p>
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {/* Failure labels */}
+      {/* Failure alerts */}
       {alerts.length > 0 && (
-        <div className="card border-red-900/40">
-          <div className="text-xs text-red-400 uppercase tracking-widest mb-3">
-            Failure Labels ({alerts.length})
-          </div>
-          <div className="space-y-2">
+        <div className="card" style={{ borderColor: "rgba(239,68,68,0.25)", background: "rgba(239,68,68,0.04)" }}>
+          <SectionHeader
+            title="Detected issues"
+            description="Automated failure labels triggered by evaluation rules"
+            count={alerts.length}
+          />
+          <div className="space-y-2.5">
             {alerts.map((a) => (
-              <div key={a.id} className="flex items-center gap-3 text-sm">
+              <div key={a.id} className="flex items-start gap-3 text-sm">
                 <SeverityBadge severity={a.severity} />
-                <span className="text-radar-muted font-mono text-xs">{a.alert_type}</span>
-                <span className="text-white/70">{a.message}</span>
+                <div>
+                  <span className="mono text-xs" style={{ color: "var(--muted)" }}>{a.alert_type}</span>
+                  <p className="text-sm mt-0.5" style={{ color: "rgba(255,255,255,0.75)" }}>{a.message}</p>
+                </div>
               </div>
             ))}
           </div>
@@ -99,36 +154,43 @@ export default async function RunDetailPage({ params }: { params: { id: string }
 
       {/* Trace timeline */}
       <div className="card">
-        <div className="text-xs text-radar-muted uppercase tracking-widest mb-4">
-          Trace Timeline ({trace.length} events)
-        </div>
+        <SectionHeader
+          title="Trace timeline"
+          description="Every step the agent took, in order. Click a step to inspect its inputs and outputs."
+          count={trace.length}
+        />
         <TraceTimeline events={trace} />
       </div>
 
       {/* Evaluation scorecard */}
       {evals.length > 0 && (
         <div className="card">
-          <div className="text-xs text-radar-muted uppercase tracking-widest mb-4">
-            Evaluation Scorecard
-          </div>
+          <SectionHeader
+            title="Evaluation scores"
+            description="Automated quality checks run after the agent completed. Each evaluator tests a different aspect of the output."
+            count={evals.length}
+          />
           <EvaluationScorecard evaluations={evals} />
         </div>
       )}
 
-      {/* Similar failures — pgvector semantic search */}
-      <div className="card">
-        <div className="text-xs text-radar-muted uppercase tracking-widest mb-4">
-          Similar Failures{" "}
-          <span className="normal-case text-radar-muted/60 font-normal text-[10px]">
-            powered by pgvector · text-embedding-3-small
-          </span>
+      {/* Similar failures */}
+      {isFailure && (
+        <div className="card">
+          <SectionHeader
+            title="Similar past failures"
+            description="Semantically similar runs found using pgvector cosine search on the trace embedding. High similarity means the agent failed in the same way before."
+          />
+          <SimilarFailures runId={run.id} />
         </div>
-        <SimilarFailures runId={run.id} />
-      </div>
+      )}
 
-      {/* Replay panel */}
+      {/* Replay */}
       <div className="card">
-        <div className="text-xs text-radar-muted uppercase tracking-widest mb-4">Replay</div>
+        <SectionHeader
+          title="Replay"
+          description="Re-evaluate this run with different settings to see how scores would change. Use this to test whether a fix improves outcomes before deploying."
+        />
         <ReplayPanel runId={run.id} comparison={comparison} />
       </div>
     </div>

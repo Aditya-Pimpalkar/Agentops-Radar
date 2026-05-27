@@ -9,61 +9,53 @@ interface Props {
 }
 
 const PASS_THRESHOLDS: Record<string, number> = {
-  groundedness: 0.7,
-  relevance: 0.6,
-  safety: 0.8,
-  tool_call_correctness: 0.7,
-  latency: 0.6,
-  format_compliance: 0.8,
-  retry_loop: 0.5,
-  evidence: 0.6,
+  groundedness: 0.7, relevance: 0.6, safety: 0.8,
+  tool_call_correctness: 0.7, latency: 0.6, format_compliance: 0.8,
+  retry_loop: 0.5, evidence: 0.6,
+};
+
+const EVAL_LABELS: Record<string, string> = {
+  groundedness: "Groundedness", relevance: "Relevance", safety: "Safety",
+  tool_call_correctness: "Tool correctness", latency: "Latency",
+  format_compliance: "Format", retry_loop: "Retry loop",
+  evidence: "Evidence", llm_judge: "LLM Judge",
 };
 
 function isPassing(evaluator: string, score: number | undefined): boolean {
-  if (score === undefined || score === null) return false;
+  if (score == null) return false;
   return score >= (PASS_THRESHOLDS[evaluator] ?? 0.5);
 }
 
-function ScoreBar({ score, evaluator }: { score: number | undefined; evaluator: string }) {
-  if (score === undefined || score === null) {
-    return <div className="text-radar-muted text-xs">—</div>;
-  }
+function MiniScoreBar({ score, evaluator }: { score: number | undefined; evaluator: string }) {
+  if (score == null) return <span className="text-xs" style={{ color: "var(--muted)" }}>—</span>;
   const pct = Math.round(score * 100);
   const passing = isPassing(evaluator, score);
-  const barColor = passing ? "bg-green-500" : "bg-red-500";
-  const textColor = passing ? "text-green-400" : "text-red-400";
-  const badgeClass = passing
-    ? "bg-green-900/50 text-green-400 border border-green-800/50"
-    : "bg-red-900/50 text-red-400 border border-red-800/50";
-
+  const barColor = passing ? "#22c55e" : "#ef4444";
+  const textColor = passing ? "#4ade80" : "#f87171";
   return (
-    <div className="space-y-1">
-      <div className="flex items-center gap-2">
-        <span className={`font-bold text-sm tabular-nums ${textColor}`}>{pct}%</span>
-        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${badgeClass}`}>
-          {passing ? "PASS" : "FAIL"}
-        </span>
+    <div className="flex items-center gap-2">
+      <div className="w-16 h-1.5 rounded-full overflow-hidden" style={{ background: "var(--border-bright)" }}>
+        <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, background: barColor }} />
       </div>
-      <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all duration-500 ${barColor}`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
+      <span className="mono text-xs w-8" style={{ color: textColor }}>{pct}%</span>
+      <span className="text-[10px] px-1.5 py-0.5 rounded font-medium" style={{
+        background: passing ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)",
+        color: passing ? "#4ade80" : "#f87171",
+        border: `1px solid ${passing ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}`,
+      }}>
+        {passing ? "PASS" : "FAIL"}
+      </span>
     </div>
   );
 }
 
 function DeltaBadge({ delta }: { delta: number | undefined }) {
-  if (delta === undefined || delta === null) return <span className="text-radar-muted">—</span>;
+  if (delta == null) return <span style={{ color: "var(--muted)" }} className="text-xs">—</span>;
   const pct = Math.round(delta * 100);
-  if (pct === 0) return <span className="text-radar-muted text-xs">no change</span>;
-  const positive = pct > 0;
+  if (Math.abs(pct) < 1) return <span className="text-xs" style={{ color: "var(--muted)" }}>no change</span>;
   return (
-    <span
-      className={`font-bold text-base tabular-nums ${positive ? "text-green-400" : "text-red-400"}`}
-    >
-      {positive ? "↑" : "↓"} {positive ? "+" : ""}{pct}%
+    <span className="mono font-bold text-sm" style={{ color: pct > 0 ? "#4ade80" : "#f87171" }}>
+      {pct > 0 ? "↑ +" : "↓ "}{pct}%
     </span>
   );
 }
@@ -75,7 +67,7 @@ export function ReplayPanel({ runId, comparison }: Props) {
   const [status, setStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [replayId, setReplayId] = useState<string | null>(null);
   const [freshComparison, setFreshComparison] = useState<ReplayComparison | null>(null);
-  const [error, setError] = useState("");
+  const [errorMsg, setErrorMsg] = useState("");
 
   const activeComparison = freshComparison ?? comparison;
   const apiKey = process.env.NEXT_PUBLIC_API_KEY ?? "dev-api-key-change-in-production";
@@ -83,7 +75,7 @@ export function ReplayPanel({ runId, comparison }: Props) {
 
   async function handleReplay() {
     setStatus("loading");
-    setError("");
+    setErrorMsg("");
     setFreshComparison(null);
     try {
       const res = await fetch(`${apiBase}/api/runs/${runId}/replay`, {
@@ -99,17 +91,13 @@ export function ReplayPanel({ runId, comparison }: Props) {
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setReplayId(data.replay_run_id);
-
-      // Fetch comparison immediately
       const cmpRes = await fetch(`${apiBase}/api/runs/${runId}/replay/comparison`, {
         headers: { "X-API-Key": apiKey },
       });
-      if (cmpRes.ok) {
-        setFreshComparison(await cmpRes.json());
-      }
+      if (cmpRes.ok) setFreshComparison(await cmpRes.json());
       setStatus("done");
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Replay failed");
+      setErrorMsg(e instanceof Error ? e.message : "Replay failed");
       setStatus("error");
     }
   }
@@ -118,36 +106,21 @@ export function ReplayPanel({ runId, comparison }: Props) {
     ? Object.keys({ ...activeComparison.original_scores, ...activeComparison.replay_scores })
     : [];
 
-  // Calculate overall improvement
-  const improvements = evaluatorKeys.filter((k) => {
-    const d = activeComparison?.score_delta?.[k];
-    return d !== undefined && d > 0.05;
-  }).length;
-  const regressions = evaluatorKeys.filter((k) => {
-    const d = activeComparison?.score_delta?.[k];
-    return d !== undefined && d < -0.05;
-  }).length;
+  const improvements = evaluatorKeys.filter((k) => (activeComparison?.score_delta?.[k] ?? 0) > 0.05).length;
+  const regressions  = evaluatorKeys.filter((k) => (activeComparison?.score_delta?.[k] ?? 0) < -0.05).length;
 
   return (
     <div className="space-y-5">
-      {/* Config row */}
+      {/* Config inputs */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <div>
-          <label className="text-xs text-radar-muted mb-1 block">Model Override</label>
-          <input
-            value={modelName}
-            onChange={(e) => setModelName(e.target.value)}
-            placeholder="e.g. gpt-4o"
-            className="w-full bg-black/30 border border-radar-border rounded px-3 py-2 text-sm text-white placeholder-radar-muted focus:outline-none focus:border-radar-accent"
-          />
+          <label className="section-label mb-1.5 block">Model override</label>
+          <input value={modelName} onChange={(e) => setModelName(e.target.value)}
+            placeholder="e.g. gpt-4o" className="field" />
         </div>
         <div>
-          <label className="text-xs text-radar-muted mb-1 block">Guardrail Strictness</label>
-          <select
-            value={strictness}
-            onChange={(e) => setStrictness(e.target.value)}
-            className="w-full bg-black/30 border border-radar-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-radar-accent"
-          >
+          <label className="section-label mb-1.5 block">Guardrail strictness</label>
+          <select value={strictness} onChange={(e) => setStrictness(e.target.value)} className="field">
             <option value="">Default</option>
             <option value="low">Low</option>
             <option value="medium">Medium</option>
@@ -155,50 +128,55 @@ export function ReplayPanel({ runId, comparison }: Props) {
           </select>
         </div>
         <div>
-          <label className="text-xs text-radar-muted mb-1 block">Prompt Override</label>
-          <input
-            value={promptOverride}
-            onChange={(e) => setPromptOverride(e.target.value)}
-            placeholder="Use strict evidence validation…"
-            className="w-full bg-black/30 border border-radar-border rounded px-3 py-2 text-sm text-white placeholder-radar-muted focus:outline-none focus:border-radar-accent"
-          />
+          <label className="section-label mb-1.5 block">Prompt override</label>
+          <input value={promptOverride} onChange={(e) => setPromptOverride(e.target.value)}
+            placeholder="Require stricter evidence..." className="field" />
         </div>
       </div>
 
+      {/* Action row */}
       <div className="flex items-center gap-3 flex-wrap">
-        <button
-          onClick={handleReplay}
-          disabled={status === "loading"}
-          className="px-4 py-2 bg-radar-accent text-white rounded text-sm hover:bg-radar-accent/80 disabled:opacity-50 transition-colors"
-        >
+        <button onClick={handleReplay} disabled={status === "loading"} className="btn-primary">
           {status === "loading" ? (
-            <><span className="animate-spin inline-block mr-1">↺</span>Running replay…</>
+            <>
+              <span className="w-3.5 h-3.5 rounded-full border-2 border-white border-t-transparent animate-spin" />
+              Running replay...
+            </>
           ) : (
-            "▷ Replay Run"
+            <>
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                <polygon points="2,1 11,6 2,11" fill="white"/>
+              </svg>
+              Replay run
+            </>
           )}
         </button>
         {status === "done" && replayId && (
-          <Link href={`/runs/${replayId}`} className="text-radar-accent text-sm hover:underline">
+          <Link href={`/runs/${replayId}`} className="text-sm hover:underline" style={{ color: "var(--accent)" }}>
             View replay run →
           </Link>
         )}
-        {status === "error" && <span className="text-red-400 text-sm">{error}</span>}
+        {status === "error" && <span className="text-red-400 text-sm">{errorMsg}</span>}
       </div>
 
       {/* Comparison table */}
       {activeComparison && evaluatorKeys.length > 0 && (
-        <div className="mt-2 pt-4 border-t border-radar-border space-y-4">
-          {/* Summary banner */}
+        <div className="pt-4 space-y-4" style={{ borderTop: "1px solid var(--border)" }}>
+          {/* Summary */}
           <div className="flex items-center gap-3 flex-wrap">
-            <div className="text-xs text-radar-muted uppercase tracking-widest">Replay Comparison</div>
-            <div className="ml-auto flex gap-2 text-xs">
+            <span className="text-sm font-semibold text-white">Score comparison</span>
+            <div className="flex gap-2 ml-auto">
               {improvements > 0 && (
-                <span className="px-2 py-0.5 rounded bg-green-900/40 border border-green-800/40 text-green-400">
+                <span className="text-xs px-2 py-0.5 rounded" style={{
+                  background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.2)", color: "#4ade80",
+                }}>
                   ↑ {improvements} improved
                 </span>
               )}
               {regressions > 0 && (
-                <span className="px-2 py-0.5 rounded bg-red-900/40 border border-red-800/40 text-red-400">
+                <span className="text-xs px-2 py-0.5 rounded" style={{
+                  background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171",
+                }}>
                   ↓ {regressions} regressed
                 </span>
               )}
@@ -206,81 +184,71 @@ export function ReplayPanel({ runId, comparison }: Props) {
           </div>
 
           {/* Column headers */}
-          <div className="grid grid-cols-[1fr_140px_80px_140px] gap-x-3 text-[10px] text-radar-muted uppercase tracking-widest pb-1 border-b border-radar-border/50">
-            <div>Evaluator</div>
-            <div>Original</div>
-            <div>Delta</div>
-            <div>Replay</div>
+          <div className="grid gap-x-4 text-xs pb-2" style={{
+            gridTemplateColumns: "1fr 160px 80px 160px",
+            color: "var(--muted)",
+            borderBottom: "1px solid var(--border)",
+          }}>
+            <div className="section-label">Evaluator</div>
+            <div className="section-label">Original</div>
+            <div className="section-label">Delta</div>
+            <div className="section-label">Replay</div>
           </div>
 
-          {/* Rows */}
+          {/* Evaluator rows */}
           <div className="space-y-3">
-            {evaluatorKeys.map((k) => {
-              const orig = activeComparison.original_scores[k];
-              const rpl = activeComparison.replay_scores[k];
-              const delta = activeComparison.score_delta[k];
-              return (
-                <div key={k} className="grid grid-cols-[1fr_140px_80px_140px] gap-x-3 items-center">
-                  <div className="text-white/80 text-xs capitalize font-medium">{k.replace(/_/g, " ")}</div>
-                  <ScoreBar score={orig} evaluator={k} />
-                  <DeltaBadge delta={delta} />
-                  <ScoreBar score={rpl} evaluator={k} />
+            {evaluatorKeys.map((k) => (
+              <div key={k} className="grid gap-x-4 items-center" style={{ gridTemplateColumns: "1fr 160px 80px 160px" }}>
+                <div className="text-sm font-medium" style={{ color: "rgba(255,255,255,0.8)" }}>
+                  {EVAL_LABELS[k] ?? k.replace(/_/g, " ")}
                 </div>
-              );
-            })}
+                <MiniScoreBar score={activeComparison.original_scores[k]} evaluator={k} />
+                <DeltaBadge delta={activeComparison.score_delta[k]} />
+                <MiniScoreBar score={activeComparison.replay_scores[k]} evaluator={k} />
+              </div>
+            ))}
           </div>
 
           {/* Latency row */}
-          {activeComparison.latency_delta_ms !== null &&
-            activeComparison.original_latency_ms !== null && (
-            <div className="pt-3 border-t border-radar-border/50">
-              <div className="grid grid-cols-[1fr_140px_80px_140px] gap-x-3 items-center">
-                <div className="text-white/80 text-xs font-medium">latency</div>
-                <div className="text-white/60 text-xs tabular-nums">{activeComparison.original_latency_ms}ms</div>
+          {activeComparison.original_latency_ms != null && (
+            <div className="pt-3" style={{ borderTop: "1px solid var(--border)" }}>
+              <div className="grid gap-x-4 items-center" style={{ gridTemplateColumns: "1fr 160px 80px 160px" }}>
+                <div className="text-sm font-medium" style={{ color: "rgba(255,255,255,0.8)" }}>Latency</div>
+                <div className="mono text-xs" style={{ color: "var(--muted-bright)" }}>{activeComparison.original_latency_ms}ms</div>
                 <div>
-                  {activeComparison.latency_delta_ms !== null && (
-                    <span
-                      className={`font-bold text-sm tabular-nums ${
-                        activeComparison.latency_delta_ms < 0 ? "text-green-400" : "text-red-400"
-                      }`}
-                    >
-                      {activeComparison.latency_delta_ms < 0 ? "↓" : "↑"}{" "}
+                  {activeComparison.latency_delta_ms != null && (
+                    <span className="mono font-bold text-sm" style={{
+                      color: activeComparison.latency_delta_ms < 0 ? "#4ade80" : "#f87171",
+                    }}>
+                      {activeComparison.latency_delta_ms < 0 ? "↓ " : "↑ "}
                       {Math.abs(activeComparison.latency_delta_ms)}ms
                     </span>
                   )}
                 </div>
-                <div className="text-white/60 text-xs tabular-nums">{activeComparison.replay_latency_ms}ms</div>
+                <div className="mono text-xs" style={{ color: "var(--muted-bright)" }}>{activeComparison.replay_latency_ms}ms</div>
               </div>
             </div>
           )}
 
           {/* Status row */}
-          <div className="pt-3 border-t border-radar-border/50">
-            <div className="grid grid-cols-[1fr_140px_80px_140px] gap-x-3 items-center">
-              <div className="text-white/80 text-xs font-medium">status</div>
-              <div>
-                <span
-                  className={`text-xs px-2 py-0.5 rounded font-medium ${
-                    activeComparison.original_status === "success"
-                      ? "bg-green-900/40 text-green-400"
-                      : "bg-red-900/40 text-red-400"
-                  }`}
-                >
-                  {activeComparison.original_status}
-                </span>
-              </div>
-              <div className="text-radar-muted text-xs">→</div>
-              <div>
-                <span
-                  className={`text-xs px-2 py-0.5 rounded font-medium ${
-                    activeComparison.replay_status === "success" || activeComparison.replay_status === "replayed"
-                      ? "bg-green-900/40 text-green-400"
-                      : "bg-red-900/40 text-red-400"
-                  }`}
-                >
-                  {activeComparison.replay_status}
-                </span>
-              </div>
+          <div className="pt-3" style={{ borderTop: "1px solid var(--border)" }}>
+            <div className="grid gap-x-4 items-center" style={{ gridTemplateColumns: "1fr 160px 80px 160px" }}>
+              <div className="text-sm font-medium" style={{ color: "rgba(255,255,255,0.8)" }}>Status</div>
+              <span className="badge" style={{
+                background: activeComparison.original_status === "success" ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)",
+                color: activeComparison.original_status === "success" ? "#4ade80" : "#f87171",
+                border: `1px solid ${activeComparison.original_status === "success" ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}`,
+              }}>
+                {activeComparison.original_status}
+              </span>
+              <span className="text-xs" style={{ color: "var(--muted)" }}>→</span>
+              <span className="badge" style={{
+                background: ["success","replayed"].includes(activeComparison.replay_status) ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)",
+                color: ["success","replayed"].includes(activeComparison.replay_status) ? "#4ade80" : "#f87171",
+                border: `1px solid ${["success","replayed"].includes(activeComparison.replay_status) ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}`,
+              }}>
+                {activeComparison.replay_status}
+              </span>
             </div>
           </div>
         </div>

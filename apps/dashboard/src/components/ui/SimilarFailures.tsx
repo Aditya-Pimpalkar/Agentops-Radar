@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 
 interface SimilarRun {
@@ -12,37 +12,36 @@ interface SimilarRun {
   total_latency_ms: number | null;
 }
 
-interface Props {
-  runId: string;
-}
+interface Props { runId: string }
 
 const STATUS_COLOR: Record<string, string> = {
-  failed: "text-red-400",
-  error: "text-red-400",
-  success: "text-green-400",
-  replayed: "text-blue-400",
-  running: "text-yellow-400",
+  failed: "#f87171",
+  error: "#f87171",
+  success: "#4ade80",
+  replayed: "#818cf8",
+  running: "#fbbf24",
 };
 
 function SimilarityBar({ value }: { value: number }) {
   const pct = Math.round(value * 100);
-  const color =
-    pct >= 85 ? "bg-red-500" : pct >= 70 ? "bg-orange-500" : "bg-yellow-500";
+  const barColor = pct >= 85 ? "#ef4444" : pct >= 70 ? "#f97316" : "#eab308";
+  const textColor = pct >= 85 ? "#f87171" : pct >= 70 ? "#fb923c" : "#fbbf24";
   return (
     <div className="flex items-center gap-2">
-      <div className="w-20 h-1.5 bg-white/10 rounded-full overflow-hidden">
-        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+      <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: "var(--border-bright)" }}>
+        <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, background: barColor }} />
       </div>
-      <span className="text-xs tabular-nums text-white/70 w-9">{pct}%</span>
+      <span className="mono text-xs w-8 text-right shrink-0" style={{ color: textColor }}>{pct}%</span>
     </div>
   );
 }
 
 export function SimilarFailures({ runId }: Props) {
   const [results, setResults] = useState<SimilarRun[] | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [embedStatus, setEmbedStatus] = useState<"idle" | "embedding" | "done" | "error">("idle");
+  const [embedding, setEmbedding] = useState(false);
+  const [embedded, setEmbedded] = useState(false);
 
   const apiKey = process.env.NEXT_PUBLIC_API_KEY ?? "dev-api-key-change-in-production";
   const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -54,127 +53,145 @@ export function SimilarFailures({ runId }: Props) {
     try {
       const res = await fetch(`${apiUrl}/api/runs/${runId}/similar?limit=5`, { headers });
       if (!res.ok) throw new Error(await res.text());
-      const data: SimilarRun[] = await res.json();
-      setResults(data);
+      setResults(await res.json());
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Search failed");
+      setResults([]);
     } finally {
       setLoading(false);
     }
   }
 
   async function embed() {
-    setEmbedStatus("embedding");
+    setEmbedding(true);
+    setError("");
     try {
-      const res = await fetch(`${apiUrl}/api/runs/${runId}/embed`, {
-        method: "POST",
-        headers,
-      });
+      const res = await fetch(`${apiUrl}/api/runs/${runId}/embed`, { method: "POST", headers });
       if (!res.ok) throw new Error(await res.text());
-      setEmbedStatus("done");
-      // Auto-search after embedding
+      setEmbedded(true);
       await search();
     } catch (e: unknown) {
-      setEmbedStatus("error");
       setError(e instanceof Error ? e.message : "Embed failed");
+      setEmbedding(false);
     }
+  }
+
+  // Auto-search on mount
+  useEffect(() => { search(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 py-4 text-sm" style={{ color: "var(--muted)" }}>
+        <span className="w-3 h-3 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin" />
+        Searching for similar failures…
+      </div>
+    );
   }
 
   return (
     <div className="space-y-4">
-      {/* Header + actions */}
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div>
-          <div className="text-xs text-radar-muted uppercase tracking-widest">
-            Semantic Similarity Search
-          </div>
-          <p className="text-white/50 text-xs mt-0.5">
-            Find past runs with similar failure patterns using pgvector cosine search
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={embed}
-            disabled={embedStatus === "embedding"}
-            className="px-3 py-1.5 border border-radar-border text-radar-muted text-xs rounded hover:border-radar-accent hover:text-radar-accent transition-colors disabled:opacity-50"
-          >
-            {embedStatus === "embedding" ? (
-              <><span className="animate-spin inline-block mr-1">↺</span>Embedding…</>
-            ) : embedStatus === "done" ? (
-              "✓ Embedded"
-            ) : (
-              "Embed this run"
-            )}
-          </button>
-          <button
-            onClick={search}
-            disabled={loading}
-            className="px-3 py-1.5 bg-radar-accent text-white text-xs rounded hover:bg-radar-accent/80 disabled:opacity-50 transition-colors"
-          >
-            {loading ? (
-              <><span className="animate-spin inline-block mr-1">↺</span>Searching…</>
-            ) : (
-              "🔍 Find Similar"
-            )}
-          </button>
-        </div>
-      </div>
-
       {error && (
-        <div className="text-red-400 text-xs p-3 bg-red-900/20 rounded border border-red-900/40">
+        <div
+          className="text-xs p-3 rounded-lg"
+          style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#fca5a5" }}
+        >
           {error}
         </div>
       )}
 
-      {results !== null && results.length === 0 && (
-        <div className="text-radar-muted text-xs p-4 text-center border border-radar-border rounded">
-          No similar runs found. Try embedding more runs first.
-        </div>
-      )}
-
-      {results && results.length > 0 && (
+      {/* Results */}
+      {results && results.length > 0 ? (
         <div className="space-y-2">
-          <div className="grid grid-cols-[1fr_90px_60px_60px] gap-x-3 text-[10px] text-radar-muted uppercase tracking-widest pb-1 border-b border-radar-border/50">
-            <div>Run</div>
-            <div>Similarity</div>
-            <div>Status</div>
-            <div>Conf.</div>
+          <div
+            className="grid gap-x-4 text-xs pb-2"
+            style={{
+              gridTemplateColumns: "1fr 120px 70px 50px",
+              color: "var(--muted)",
+              borderBottom: "1px solid var(--border)",
+            }}
+          >
+            <div className="section-label">Run</div>
+            <div className="section-label">Similarity</div>
+            <div className="section-label">Status</div>
+            <div className="section-label">Conf.</div>
           </div>
           {results.map((r) => (
             <div
               key={r.run_id}
-              className="grid grid-cols-[1fr_90px_60px_60px] gap-x-3 items-center py-2 border-b border-radar-border/30 last:border-0"
+              className="grid gap-x-4 items-center py-2.5 rounded-lg px-2 -mx-2 transition-colors"
+              style={{
+                gridTemplateColumns: "1fr 120px 70px 50px",
+              }}
             >
               <div>
                 <Link
                   href={`/runs/${r.run_id}`}
-                  className="font-mono text-xs text-radar-accent hover:underline"
+                  className="mono text-xs font-medium hover:underline"
+                  style={{ color: "var(--accent)" }}
                 >
                   {r.run_id.slice(0, 8)}…
                 </Link>
                 {r.final_output && (
-                  <p className="text-white/40 text-[10px] mt-0.5 line-clamp-1">
-                    {r.final_output.slice(0, 80)}
+                  <p className="text-xs mt-0.5 line-clamp-1" style={{ color: "var(--muted)" }}>
+                    {r.final_output.slice(0, 70)}
                   </p>
                 )}
               </div>
               <SimilarityBar value={r.similarity} />
-              <span className={`text-xs font-medium ${STATUS_COLOR[r.status] ?? "text-white/60"}`}>
+              <span className="text-xs font-medium" style={{ color: STATUS_COLOR[r.status] ?? "rgba(255,255,255,0.6)" }}>
                 {r.status}
               </span>
-              <span className="text-xs tabular-nums text-white/60">
-                {r.confidence_score !== null ? `${Math.round((r.confidence_score ?? 0) * 100)}%` : "—"}
+              <span className="mono text-xs" style={{ color: "rgba(255,255,255,0.5)" }}>
+                {r.confidence_score != null ? `${Math.round(r.confidence_score * 100)}%` : "—"}
               </span>
             </div>
           ))}
         </div>
+      ) : (
+        <div
+          className="py-6 text-center space-y-3"
+        >
+          <div className="text-sm" style={{ color: "var(--muted)" }}>
+            No similar failures found.
+          </div>
+          <p className="text-xs" style={{ color: "var(--muted)" }}>
+            This run hasn&apos;t been embedded yet. Generate an embedding to enable similarity search.
+          </p>
+          <button
+            onClick={embed}
+            disabled={embedding || embedded}
+            className="btn-secondary mx-auto"
+          >
+            {embedding ? (
+              <>
+                <span className="w-3 h-3 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
+                Generating embedding…
+              </>
+            ) : embedded ? (
+              "✓ Embedded — searching…"
+            ) : (
+              "Generate embedding & search"
+            )}
+          </button>
+        </div>
       )}
 
-      {results === null && !loading && (
-        <div className="text-radar-muted text-xs p-4 text-center border border-dashed border-radar-border rounded">
-          Click <strong className="text-white/60">Find Similar</strong> to search for runs with
-          matching failure signatures.
-          {" "}If no results appear, click <strong className="text-white/60">Embed this run</strong> first.
+      {/* Refresh / re-embed actions */}
+      {results !== null && results.length > 0 && (
+        <div className="flex items-center gap-3 pt-2" style={{ borderTop: "1px solid var(--border)" }}>
+          <button onClick={search} className="btn-secondary text-xs py-1.5 px-3">
+            Refresh
+          </button>
+          <button
+            onClick={embed}
+            disabled={embedding}
+            className="btn-secondary text-xs py-1.5 px-3"
+          >
+            {embedding ? "Embedding…" : embedded ? "Re-embed" : "Re-embed this run"}
+          </button>
+          <span className="text-xs ml-auto" style={{ color: "var(--muted)" }}>
+            pgvector · cosine similarity · text-embedding-3-small
+          </span>
         </div>
       )}
     </div>
